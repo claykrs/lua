@@ -1,6 +1,6 @@
 --[[ randlib.lua
     - features:
-    	new(seed?)     	 : create a new RNG; seed optinal
+    	new(seed?)     	 : create a new RNG; seed optional
       	seed(new)        : reseed the RNG
       
       	next()           : 32-bit integer output
