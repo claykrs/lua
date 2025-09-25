@@ -15,7 +15,6 @@
       	normal(mean,stddev) : normally-distributed number (Box-Muller)
 ]]
 
-
 local randlib = {}
 randlib.__index = randlib
 
