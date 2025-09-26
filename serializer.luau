@@ -24,6 +24,10 @@
         unpack_string_fixed(buf, length, offset) : unpack fixed-length string, returns string and new offset
         pack_string_array(arr)     : pack array of null-terminated strings
         unpack_string_array(buf)   : unpack array of null-terminated strings
+        pack_vector(v)             : pack Vector2/Vector3/UDim/UDim2/etc as null-terminated tostring
+        unpack_vector(buf, offset, type_name) : unpack vector/udim types from string
+        pack_table(tbl)            : pack mixed table (auto-detect common Roblox types)
+        unpack_table(buf, types)   : unpack mixed buffer given type schema (types = {"i32","string","Vector3",...})
         scramble(buf,key)          : XOR each byte with key
         unscramble(buf,key)        : reverse of scramble (same as scramble)
         obfuscate(buf,shift)       : circular shift of buffer bytes by shift
@@ -305,6 +309,172 @@ function serializer.unpack_string_array(buf)
 		out[idx] = table.concat(chars)
 		idx = idx + 1
 		offset = offset + i + 1
+	end
+	return out
+end
+
+function serializer.pack_vector(v)
+	return serializer.pack_string_nt(tostring(v))
+end
+
+local function read_u16_at(buf, offset)
+	local val = buffer.readu16(buf, offset)
+	return val, offset + 2
+end
+
+local function read_i16_at(buf, offset)
+	local v = buffer.readu16(buf, offset)
+	if v > 0x7FFF then v = v - 0x10000 end
+	return v, offset + 2
+end
+
+local function read_u32_at(buf, offset)
+	local val = buffer.readu32(buf, offset)
+	return val, offset + 4
+end
+
+local function read_i32_at(buf, offset)
+	local v = buffer.readu32(buf, offset)
+	if v > 0x7FFFFFFF then v = v - 0x100000000 end
+	return v, offset + 4
+end
+
+local function read_u64_at(buf, offset)
+	local hi = buffer.readu32(buf, offset)
+	local lo = buffer.readu32(buf, offset + 4)
+	return {hi, lo}, offset + 8
+end
+
+local function read_i64_at(buf, offset)
+	local hi = buffer.readu32(buf, offset)
+	local lo = buffer.readu32(buf, offset + 4)
+	if hi > 0x7FFFFFFF then hi = hi - 0x100000000 end
+	if lo > 0x7FFFFFFF then lo = lo - 0x100000000 end
+	return {hi, lo}, offset + 8
+end
+
+local function read_f32_at(buf, offset)
+	local v = buffer.readf32(buf, offset)
+	return v, offset + 4
+end
+
+local function read_f64_at(buf, offset)
+	local v = buffer.readf64(buf, offset)
+	return v, offset + 8
+end
+
+local function read_byte_at(buf, offset)
+	local v = buffer.readu8(buf, offset)
+	return v, offset + 1
+end
+
+local function read_string_nt_at(buf, offset)
+	return serializer.unpack_string_nt(buf, offset)
+end
+
+local readers = {
+	i16 = read_i16_at,
+	u16 = read_u16_at,
+	i32 = read_i32_at,
+	u32 = read_u32_at,
+	i64 = read_i64_at,
+	u64 = read_u64_at,
+	f32 = read_f32_at,
+	f64 = read_f64_at,
+	number = read_f64_at,
+	byte = read_byte_at,
+	u8 = read_byte_at,
+	string = read_string_nt_at,
+	Vector2 = function(b, o) return serializer.unpack_vector(b, o, "Vector2") end,
+	Vector3 = function(b, o) return serializer.unpack_vector(b, o, "Vector3") end,
+	Vector2int16 = function(b, o) return serializer.unpack_vector(b, o, "Vector2int16") end,
+	Vector3int16 = function(b, o) return serializer.unpack_vector(b, o, "Vector3int16") end,
+	UDim = function(b, o) return serializer.unpack_vector(b, o, "UDim") end,
+	UDim2 = function(b, o) return serializer.unpack_vector(b, o, "UDim2") end,
+	boolean = function(b, o) local v, no = read_byte_at(b, o) return (v ~= 0), no end,
+}
+
+
+function serializer.unpack_vector(buf, offset, t)
+	offset = offset or 0
+	local str, no = serializer.unpack_string_nt(buf, offset)
+	if t:find("Vector2") then
+		local x, y = str:match("%(([^,]+),([^,]+)%)")
+		return Vector2.new(tonumber(x), tonumber(y)), no
+	elseif t:find("Vector3") then
+		local x, y, z = str:match("%(([^,]+),([^,]+),([^,]+)%)")
+		return Vector3.new(tonumber(x), tonumber(y), tonumber(z)), no
+	elseif t == "UDim" then
+		local scale, offset_val = str:match("UDim%s*%(([^,]+),([^,]+)%)")
+		return UDim.new(tonumber(scale), tonumber(offset_val)), no
+	elseif t == "UDim2" then
+		local xscale, xoffset, yscale, yoffset = str:match("UDim2%s*%(([^,]+),([^,]+),([^,]+),([^,]+)%)")
+		return UDim2.new(tonumber(xscale), tonumber(xoffset), tonumber(yscale), tonumber(yoffset)), no
+	else
+		return str, no
+	end
+end
+
+function serializer.unpack_value(buf, offset, t)
+	offset = offset or 0
+	local reader = readers[t]
+	if not reader then error("unsupported type: " .. tostring(t)) end
+	return reader(buf, offset)
+end
+
+
+function serializer.pack_table(tbl)
+	local buffers = {}
+	local total_len = 0
+	for i = 1, #tbl do
+		local v = tbl[i]
+		local t = typeof(v)
+		local b
+		if t == "number" then
+			if math.floor(v) == v then
+				b = serializer.pack_i32({v})
+			else
+				b = serializer.pack_f64({v})
+			end
+		elseif t == "string" then
+			b = serializer.pack_string_nt(v)
+		elseif t == "table" then
+			if #v == 2 and type(v[1]) == "number" and type(v[2]) == "number" then
+				b = serializer.pack_i64({v})
+			else
+				error("unsupported table format")
+			end
+		elseif t:find("Vector") or t:find("UDim") then
+			b = serializer.pack_vector(v)
+		elseif t == "boolean" then
+			b = serializer.pack_bytes({v and 1 or 0})
+		else
+			error("unsupported type: " .. tostring(t))
+		end
+		buffers[#buffers + 1] = b
+		total_len = total_len + buffer.len(b)
+	end
+	local out = buffer.create(total_len)
+	local pos = 0
+	for i = 1, #buffers do
+		local b = buffers[i]
+		local bl = buffer.len(b)
+		for j = 0, bl - 1 do
+			buffer.writeu8(out, pos, buffer.readu8(b, j))
+			pos = pos + 1
+		end
+	end
+	return out
+end
+
+function serializer.unpack_table(buf, types)
+	if not types then error("types schema required for unpack_table") end
+	local out = {}
+	local offset = 0
+	for i = 1, #types do
+		local v, no = serializer.unpack_value(buf, offset, types[i])
+		out[i] = v
+		offset = no
 	end
 	return out
 end
