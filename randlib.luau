@@ -5,14 +5,14 @@
       
       	next()           : 32-bit integer output
       	next_float()     : float in [0, 1)
-      	randint(min,max) : integer in [min, max]
-      	randrange(min,max,step) : pick from arithmetic range
+      	randint(min, max) : integer in [min, max]
+      	randrange(min, max, step) : pick from arithmetic range
       	randbool(p)      : true/false with probability p
       	randchoice(list) : random element from list
       	sample(list,k)   : pick k unique elements
       	randomize(list)  : shuffle a list in-place
       	randbytes(n)     : string of n random bytes
-      	normal(mean,stddev) : normally-distributed number (Box-Muller)
+      	normal(mean, stddev) : normally-distributed number (Box-Muller)
 ]]
 
 local randlib = {}
